@@ -1,19 +1,35 @@
-# ROG RYUO IV 屏幕旋转 180°
+# ROG RYUO IV Upside-Down Mount Screen Fix
 
-让倒装的 ROG RYUO IV 水冷屏在 Android 启动后自行翻转 HomeUI 的文字、硬件数据和全屏视频。旋转程序运行在屏幕设备上。Info Hub 仍负责发送 PC 温度、占用率等数据。
+**English** | [简体中文](README.zh-CN.md)
 
-## 实测范围
+Mounted your ROG RYUO IV pump upside down? This flips the LCD back. It runs on the screen device itself. Once Android boots, it rotates the HomeUI text, the hardware stats overlay and fullscreen video by 180°. Armoury Crate / Info Hub still sends PC temperature, load and other data as usual.
 
-- 设备代号 `cm16`，Rockchip RK3562，Android 13，固件 **V1.0.10**，HomeUI **1.7.6**，`arm64-v8a`。
-- 已验证 2240×1080 全屏视频和数据叠层一起翻转、屏幕重启后自动生效，以及关闭服务后恢复原方向。
-- 分屏、其他固件和其他型号未验证。开机动画在 HomeUI 启动前播放，因此仍是原方向。
+## Tested on
 
-## 原理
+- Device codename `cm16`, Rockchip RK3562, Android 13, firmware **V1.0.10**, HomeUI **1.7.6**, `arm64-v8a`.
+- Verified:
+  - 2240×1080 fullscreen video and the data overlay flip together.
+  - The rotation comes back automatically after the screen reboots.
+  - Disabling the service restores the original orientation.
+- Split screen, other firmware versions and other models are untested.
+- The boot animation plays before HomeUI starts, so it stays in the original orientation.
 
-面板物理分辨率是 1080×2240，原厂显示管线已经把它横置为 2240×1080。这台设备上，改 Android 的系统旋转曾触发设备重启，而 Info Hub 的 `rotate` 命令只记录角度，实际画面没变。本方案在原厂 HomeUI 进程内调整两层内容。
+## How it works
 
-1. **文字和 UI**：在 Android 主线程把 HomeUI 的 `DecorView` 设为 `setRotation(180)`。View 树里的文字、图片和数据叠层一起翻转。
-2. **视频**：原厂播放器用 `SurfaceView` 输出独立的合成层。仅旋转 View 树时，视频仍按原方向显示。脚本找到可见的全屏 `SurfaceView`，读取其 `mSurfaceControl` 容器和实际缓冲区尺寸，用一次 `SurfaceControl.Transaction` 更新矩阵和位置。以显示尺寸 `W × H` 和缓冲区尺寸 `w × h` 计算：
+The panel's physical resolution is 1080×2240. The stock display pipeline already lays it out as a 2240×1080 landscape screen. On this device:
+
+- changing Android's system rotation once caused the device to reboot;
+- Info Hub's `rotate` command only stores the angle and the picture does not change.
+
+So this project adjusts two layers of content inside the stock HomeUI process instead.
+
+1. **Text and UI**: on the Android main thread, set HomeUI's `DecorView` to `setRotation(180)`. Text, images and the data overlay in the view tree all flip with it.
+2. **Video**: the stock player renders through a `SurfaceView`, which is a separate composition layer. Rotating the view tree alone leaves the video in its original orientation. The script:
+   - finds the visible fullscreen `SurfaceView`;
+   - reads its `mSurfaceControl` container and actual buffer size;
+   - updates the matrix and position in a single `SurfaceControl.Transaction`.
+
+   With display size `W × H` and buffer size `w × h`:
 
    ```text
    scaleX = W / w
@@ -22,36 +38,55 @@
    y' = H - scaleY * y
    ```
 
-   例如，1920×960 的视频在 2240×1080 的屏幕上需要保留原有的横纵缩放。直接套 `-1, -1` 会让视频偏移并留下黑边。矩阵和位置必须一起提交。
-3. **开机生效**：新增的 `/vendor/etc/init/ryuo180.rc` 在 Android 的 `boot` 阶段启动设备上的脚本。脚本等 `sys.boot_completed=1`，确认 HomeUI 已启动，再用本机 `frida-inject` 加载上面的逻辑。它监视 HomeUI 的进程号。如果应用在注入后很快退出，脚本停止继续注入。运行时逻辑也会在识别到新的全屏视频层或缓冲区尺寸时重新应用变换。
+   For example, a 1920×960 video on a 2240×1080 screen must keep its original horizontal and vertical scale. Applying a plain `-1, -1` shifts the video and leaves black bars. The matrix and position must be committed together.
+3. **Start on boot**: a new `/vendor/etc/init/ryuo180.rc` starts the on-device script in Android's `boot` stage. The script:
+   - waits for `sys.boot_completed=1`;
+   - confirms HomeUI is running;
+   - uses the local `frida-inject` to load the logic above;
+   - watches HomeUI's process ID, and stops re-injecting if the app exits soon after an injection.
 
-原厂 APK、启动镜像、Android 系统旋转参数和媒体文件沿用原样。常驻脚本只在设备上运行，注入器无需打开网络监听端口。
+   The runtime logic also re-applies the transform when it detects a new fullscreen video layer or a new buffer size.
 
-## 文件
+The stock APK, boot image, Android rotation settings and media files are left untouched. The resident script runs only on the device, and the injector does not open any network listening port.
 
-| 文件 | 用途 |
+## Files
+
+| File | Purpose |
 | --- | --- |
-| [device/rotate.js](device/rotate.js) | 两层 180° 旋转逻辑 |
-| [device/start.sh](device/start.sh) | 等待 Android 和 HomeUI，启动本地注入 |
-| [device/ryuo180.rc](device/ryuo180.rc) | Android init 开机入口 |
-| [device/control.sh](device/control.sh) | 安装入口、查看状态、启用、关闭及移除入口 |
-| [tools/build.py](tools/build.py) | 下载、校验并组装固定版本的 Frida 依赖 |
+| [device/rotate.js](device/rotate.js) | The two-layer 180° rotation logic |
+| [device/start.sh](device/start.sh) | Waits for Android and HomeUI, then starts local injection |
+| [device/ryuo180.rc](device/ryuo180.rc) | Android init boot entry |
+| [device/control.sh](device/control.sh) | Installs the boot entry; shows status; enables, disables or removes it |
+| [tools/build.py](tools/build.py) | Downloads, verifies and assembles pinned Frida dependencies |
 
-## 构建
+## Build
 
-需要 Python 3.10+。从仓库根目录运行：
+Requires Python 3.10+. From the repository root:
 
 ```sh
 python tools/build.py
 ```
 
-构建会从 Frida 和 PyPI 下载固定版本，校验 SHA-256，再生成 `dist/`。其中 `rotate.bundle.js` 由 Frida 的 Java bridge 和本项目的旋转代码拼接而成。仓库只放源码，`dist/`、固件镜像和原厂 APK 不需要上传。
+The build:
 
-## 部署
+- downloads pinned versions from Frida and PyPI;
+- verifies their SHA-256;
+- generates `dist/`.
 
-**这一步会向设备的 `vendor` 分区增加一个 init 文件。** 动手前应先备份分区并校验镜像，实测能进入原厂 Recovery、通过 ADB 获得 root，并返回正常系统。安装脚本只接受本项目实测的原厂 `vendor` 镜像哈希。哈希不一致时会停下。
+`dist/rotate.bundle.js` combines Frida's Java bridge with this project's rotation code. The repo holds source only. `dist/`, firmware images and stock APKs are not committed.
 
-先运行 `adb devices -l`。把下面的 `SERIAL` 全部换成你的水冷屏序列号。使用 Info Hub 自带的 ADB 时，从 Info Hub 程序目录调用它，确保能加载配套 DLL。
+## Install
+
+**This step adds an init file to the device's `vendor` partition.** Before you start:
+
+1. Back up the partition and verify the image.
+2. Confirm that you can enter the stock Recovery.
+3. Confirm that you can get root over ADB.
+4. Confirm that you can boot back into the normal system.
+
+The installer only accepts the stock `vendor` image hash tested by this project. If the hash differs, it stops.
+
+Run `adb devices -l` first, and replace every `SERIAL` below with your cooler screen's serial number. If you use the ADB bundled with Info Hub, run it from the Info Hub program folder so it can load its DLLs.
 
 ```sh
 adb -s SERIAL shell id
@@ -59,7 +94,7 @@ adb -s SERIAL shell getprop ro.product.device
 adb -s SERIAL shell 'test ! -e /data/local/ryuo180 && mkdir -m 700 /data/local/ryuo180'
 ```
 
-先确认前两条分别返回 root 和 `cm16`。如果最后一条失败，先检查已有目录的来源。目录新建成功后再继续。
+The first command should return root and the second should return `cm16`. If the last command fails, find out where the existing directory came from first. Continue only after the directory has been created.
 
 ```sh
 adb -s SERIAL push dist/inject /data/local/ryuo180/inject
@@ -71,38 +106,41 @@ adb -s SERIAL shell 'chmod 700 /data/local/ryuo180/inject && chmod 600 /data/loc
 adb -s SERIAL shell sh /data/local/ryuo180/control.sh install-inactive
 ```
 
-先在翻转关闭的状态下重启屏幕，确认原厂画面能启动。然后启用并再次重启，验证开机自动生效。
+First reboot the screen with the flip still disabled, and confirm the stock UI starts. Then enable it and reboot again to verify it applies on boot.
 
 ```sh
 adb -s SERIAL reboot
-# 等设备重新连接，并确认 Android 启动完成后再执行下一条。
+# Wait for the device to reconnect and Android to finish booting, then run:
 adb -s SERIAL shell sh /data/local/ryuo180/control.sh enable
 adb -s SERIAL reboot
-# 等设备重新连接后验证。
+# After the device reconnects, verify:
 adb -s SERIAL shell sh /data/local/ryuo180/control.sh status
 adb -s SERIAL shell logcat -d -s RYUO180
 ```
 
-日志应出现 `Applied UI and video rotation`。再检查屏幕上视频在动、数字在更新。如果暂时没有硬件数据，可以在 Info Hub 重新应用当前主题。
+The log should show `Applied UI and video rotation`. Also check on the screen that the video is playing and the numbers are updating. If hardware data does not show up yet, re-apply the current theme in Info Hub.
 
-## 回退
+## Revert
 
-关闭并恢复原厂方向：
+To disable the flip and restore the stock orientation:
 
 ```sh
 adb -s SERIAL shell sh /data/local/ryuo180/control.sh disable
 ```
 
-关闭后如需移除开机入口：
+After disabling, you can also remove the boot entry:
 
 ```sh
 adb -s SERIAL shell sh /data/local/ryuo180/control.sh remove-startup
 ```
 
-`disable` 会移除启用标记、停止服务并重启 HomeUI。 `remove-startup` 只删除比对过的本项目 init 文件。实测 Recovery 能通过 ADB 看到原始分区，但**没有实刷原始镜像做回退演练**。Fastboot 的临时引导命令曾返回成功，但设备又回到 bootloader，因此不要把它当成已验证的救援办法。
+- `disable` removes the enable flag, stops the service and restarts HomeUI.
+- `remove-startup` deletes only this project's init file, after checking that it matches.
 
-## 参考
+Recovery could see the original partitions over ADB in testing, but **flashing the original image back as a rollback has not been rehearsed**. A Fastboot temporary-boot command once reported success, but the device dropped back to the bootloader. Do not treat it as a verified recovery path.
 
-- [FoxPodZ/ryuo-iv-screen](https://github.com/FoxPodZ/ryuo-iv-screen) — RYUO IV 协议、ADB 和原厂应用的逆向分析。
-- [Android 13 init 文档](https://android.googlesource.com/platform/system/core/+/refs/heads/android13-release/init)。
-- [Frida Android 文档](https://frida.re/docs/android/) · [Frida 17.26.2](https://github.com/frida/frida/releases/tag/17.26.2) · [frida-tools 14.13.0](https://pypi.org/project/frida-tools/14.13.0/)。
+## References
+
+- [FoxPodZ/ryuo-iv-screen](https://github.com/FoxPodZ/ryuo-iv-screen): reverse engineering of the RYUO IV protocol, ADB access and the stock apps.
+- [Android 13 init documentation](https://android.googlesource.com/platform/system/core/+/refs/heads/android13-release/init).
+- [Frida Android docs](https://frida.re/docs/android/) · [Frida 17.26.2](https://github.com/frida/frida/releases/tag/17.26.2) · [frida-tools 14.13.0](https://pypi.org/project/frida-tools/14.13.0/).
